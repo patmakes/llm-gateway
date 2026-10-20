@@ -331,15 +331,18 @@ doesn't mean a manual start. Useful: when the status code doesn't match the
 story, stop reading logs and put `tcpdump` on **both** ends — a missing packet is
 a different bug than a refused one.
 
-There were more. The full list — nginx's `proxy_set_header` inheritance rule
-that silently discards server-level headers, buffering that turns token
-streaming into one lump at the end, MCP's Host-header rebinding check, IPv6
-clients hitting `deny all`, Ollama holding 10 GB of VRAM hostage with
-`keep_alive: -1`, and the web UI's `get_datetime` tool returning the *browser's*
-clock while the model insists otherwise — is written up as symptom, cause, fix,
-and how to spot it fast.
-
-<!-- TODO(author): link docs/gotchas.md here once Phase 5 lands. -->
+There were plenty more, and the pattern repeats: the error you're shown is
+rarely the error you have. nginx's `proxy_set_header` inheritance rule silently
+discards every server-level header the moment a `location` sets one of its own.
+Leaving `proxy_buffering` on turns token streaming into one lump arriving at the
+end, which looks like a slow model rather than a proxy setting. IPv6 clients hit
+`deny all` against an IPv4 allowlist and get a 403 that reads like an auth
+failure — including `curl localhost` on the gateway itself. Ollama holds 10 GB
+of VRAM hostage with `keep_alive: -1` and llama-server fails to allocate without
+naming whose memory it took. And my favourite: the web UI's `get_datetime` tool
+runs *in the browser*, so it returns the client's clock and time zone while the
+model explains, with total confidence, that it's reading the server's. Models
+guess where a tool runs.
 
 ## What's next
 
