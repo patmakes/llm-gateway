@@ -1,0 +1,58 @@
+# --- Secrets & TLS material (never commit) ---
+ansible/files/tls/*
+!ansible/files/tls/README.md
+*.key
+*.pem
+*.crt
+*.csr
+*.p12
+*.pfx
+pki/
+
+# --- Ansible vault & real environment ---
+**/vault.yml
+**/vault*.yml
+.vault_pass*
+*.vault
+ansible/inventory.ini
+ansible/inventory*.ini
+!ansible/inventory.example.ini
+ansible/host_vars/
+
+# --- Ansible runtime junk ---
+*.retry
+ansible/.ansible/
+ansible/fact_cache/
+
+# --- Env files / tokens ---
+.env
+.env.*
+!.env.example
+*.token
+
+# --- Python (mcp-server) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# --- Archives / bundles ---
+*.tar.gz
+*.zip
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+ansible/group_vars/all.yml
+*.save
+!**/vault.example.yml
+bootstrap.local.sh
+
+# --- Local account provisioning (kept private) ---
+bootstrap-service-accounts.sh
+create-user.sh
+bootstrap.local*.sh

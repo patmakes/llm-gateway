@@ -1,0 +1,35 @@
+---
+# Copy to all.yml and fill in. all.yml is git-ignored; this example is committed.
+# Real secrets go in vault.yml (see vault.example.yml), referenced here as vault_*.
+
+# ---------------------------------------------------------------- names
+gateway_fqdn: llm.example.ts.net                 # what browsers / OpenCode connect to (gateway cert SAN)
+gateway_ip: 100.64.0.10                          # gateway's tailnet IP; the only source the MCP host accepts
+llama_upstream_host: llm-host.example.ts.net     # must match the llama-server cert SAN
+llama_upstream_port: 8443
+mcp_upstream_host: mcp-host.example.ts.net       # must match the MCP cert SAN
+mcp_upstream_port: 8000
+
+gateway_resolver: 100.100.100.100                # Tailscale MagicDNS, or your own DNS server
+gateway_allowed_client_cidrs:
+  - 100.64.0.0/10                                # tailnet (CGNAT range)
+  - 192.168.0.0/24                               # LAN - adjust or remove
+  # - fd7a:115c:a1e0::/48                        # tailnet IPv6, if clients use it (else nginx 403s them)
+
+# ---------------------------------------------------------------- secrets (values live in vault.yml)
+mcp_bearer_token: "{{ vault_mcp_bearer_token | default('') }}"   # "" disables the /mcp token check
+searxng_secret_key: "{{ vault_searxng_secret_key }}"
+
+# ---------------------------------------------------------------- TLS material on the control node
+# Issued by your own CA. See files/tls/README.md for the expected file names.
+tls_src_dir: "{{ playbook_dir }}/files/tls"
+ca_crt: "{{ tls_src_dir }}/ca.crt"               # copied to the gateway as ca-root.pem
+
+# ---------------------------------------------------------------- images (pin by tag or digest)
+nginx_image: nginx:1.29-alpine
+searxng_image: searxng/searxng:<pinned-tag>      # pick a current tag from Docker Hub
+docker_users: [ansible]
+
+# ---------------------------------------------------------------- MCP host network
+mcp_dns_server: 192.168.0.1                      # resolver the MCP host (and Docker's embedded DNS) uses
+mcp_admin_cidrs: [192.168.0.0/24]                # where SSH/admin access is allowed from

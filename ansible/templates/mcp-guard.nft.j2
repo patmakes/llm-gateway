@@ -1,0 +1,51 @@
+# {{ ansible_managed }}
+# Separate table so it coexists with Docker's own rules. A "drop" in any
+# base chain is final, so these drops win even though Docker's chains accept.
+table inet mcp_guard {
+  set private4 {
+    type ipv4_addr; flags interval;
+    elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10,
+                 169.254.0.0/16, 127.0.0.0/8, 0.0.0.0/8, 224.0.0.0/4, 240.0.0.0/4 }
+  }
+  set private6 {
+    type ipv6_addr; flags interval;
+    elements = { ::1/128, fc00::/7, fe80::/10, ff00::/8 }
+  }
+  set admin { type ipv4_addr; flags interval; elements = { {{ mcp_admin_cidrs | join(', ') }} } }
+
+  # ---- inbound to the VM itself (SSH, ICMP, Tailscale)
+  chain input {
+    type filter hook input priority 0; policy drop;
+    iif lo accept
+    ct state established,related accept
+    meta l4proto { icmp, ipv6-icmp } accept
+    ip saddr @admin tcp dport 22 accept
+  }
+
+  # ---- container traffic (Docker DNATs published ports, so they land here, not in input)
+  chain forward {
+    type filter hook forward priority 0; policy accept;
+    ct state established,related accept
+
+    # Only the nginx gateway may reach the published MCP port
+    ct status dnat tcp dport 8000 ip saddr != {{ gateway_ip }} drop
+
+    # Container egress: internet yes, anything private no
+    iifname "br-mcp" ip daddr {{ mcp_docker_subnet }} accept    # mcp <-> searxng
+    iifname "br-mcp" ip daddr {{ mcp_dns_server }} meta l4proto { tcp, udp } th dport 53 accept   # Docker's embedded DNS forwards from the container netns
+    iifname "br-mcp" ip daddr @private4 drop
+    iifname "br-mcp" ip6 daddr @private6 drop
+    iifname "br-mcp" meta l4proto tcp tcp dport { 80, 443 } accept   # web only
+    iifname "br-mcp" drop # everything else UDP ICMP other ports
+  }
+
+  # ---- the VM's own egress: DNS to the resolver, web, tailscale; nothing else private
+  chain output {
+    type filter hook output priority 0; policy accept;
+    oif lo accept
+    ct state established,related accept
+    ip daddr {{ mcp_dns_server }} udp dport 53 accept
+    ip daddr {{ mcp_dns_server }} tcp dport 53 accept
+    ip daddr @private4 meta skuid != 0 drop      # non-root processes can't reach private nets
+  }
+}

@@ -1,0 +1,48 @@
+---
+# Shared: install Docker CE + compose plugin on Debian/Ubuntu.
+# (Skip this include if your existing docker role already does it.)
+- name: Install prerequisites
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, gnupg, python3-docker, nftables]
+    state: present
+    update_cache: true
+
+- name: Add Docker apt key
+  ansible.builtin.get_url:
+    url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Add Docker apt repo
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }}
+      signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/{{ ansible_distribution | lower }}
+      {{ ansible_distribution_release }} stable
+    filename: docker
+
+- name: Install Docker
+  ansible.builtin.apt:
+    name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+    state: present
+    update_cache: true
+
+- name: Docker daemon settings (log rotation, no userland proxy)
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "10m", "max-file": "3" },
+        "userland-proxy": false,
+        "live-restore": true
+      }
+  notify: restart docker
+
+- name: Enable Docker
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true

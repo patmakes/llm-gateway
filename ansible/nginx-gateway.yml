@@ -1,0 +1,121 @@
+---
+# Deploy the nginx gateway container (TLS termination + routing for llama-server and MCP)
+#   ansible-playbook -i inventory.ini nginx-gateway.yml
+- name: nginx gateway
+  hosts: gateway
+  become: true
+  vars:
+    nginx_root: /opt/nginx-gateway
+
+  handlers:
+    - name: restart docker
+      ansible.builtin.service: { name: docker, state: restarted }
+    - name: reload nginx
+      ansible.builtin.command: docker exec nginx-gateway nginx -s reload
+      changed_when: true
+
+  tasks:
+    - name: Docker engine
+      ansible.builtin.import_tasks: tasks-docker.yml
+
+    - name: Directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ nginx_root }}/conf.d", mode: "0755" }
+        - { path: "{{ nginx_root }}/tls",    mode: "0750" }
+        - { path: "{{ nginx_root }}/logs",   mode: "0755" }
+
+    - name: TLS material (gateway cert/key + CA root for upstream verification)
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ nginx_root }}/tls/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: "{{ tls_src_dir }}/{{ gateway_fqdn }}.crt", dest: gateway.crt, mode: "0644" }
+        - { src: "{{ tls_src_dir }}/{{ gateway_fqdn }}.key", dest: gateway.key, mode: "0600" }
+        - { src: "{{ ca_crt }}", dest: ca-root.pem, mode: "0644" }
+      notify: reload nginx
+
+    - name: Gateway site config
+      ansible.builtin.template:
+        src: templates/llm-gateway.conf.j2
+        dest: "{{ nginx_root }}/conf.d/llm-gateway.conf"
+        mode: "0644"
+      register: site_conf
+
+    - name: Remove image default site (we mount conf.d wholesale)
+      ansible.builtin.file:
+        path: "{{ nginx_root }}/conf.d/default.conf"
+        state: absent
+
+    - name: nginx container
+      community.docker.docker_container:
+        name: nginx-gateway
+        image: "{{ nginx_image }}"
+        restart_policy: unless-stopped
+        published_ports: ["80:80", "443:443"]
+        volumes:
+          - "{{ nginx_root }}/conf.d:/etc/nginx/conf.d:ro"
+          - "{{ nginx_root }}/tls:/etc/nginx/tls:ro"
+          - "{{ nginx_root }}/logs:/var/log/nginx"
+        read_only: true
+        tmpfs: ["/var/cache/nginx", "/var/run", "/tmp"]
+        security_opts: ["no-new-privileges:true"]
+        cap_drop: [ALL]
+        capabilities: [CHOWN, SETUID, SETGID, NET_BIND_SERVICE, DAC_OVERRIDE]
+        healthcheck:
+          test: ["CMD", "nginx", "-t", "-q"]
+          interval: 60s
+
+    - name: Validate config inside the container before reloading
+      ansible.builtin.command: docker exec nginx-gateway nginx -t
+      changed_when: false
+      when: site_conf is changed
+      notify: reload nginx
+
+    # Host firewall: Docker publishes 80/443 via DNAT, which skips the INPUT
+    # chain, so the client restriction lives in nginx (allow/deny) plus this
+    # forward filter. SSH stays open to the tailnet/LAN only.
+    - name: Host nftables
+      when: gateway_firewall | default('nftables') == 'nftables'
+      ansible.builtin.copy:
+        dest: /etc/nftables.d/gateway.nft
+        mode: "0644"
+        content: |
+          table inet gw_guard {
+            set clients { type ipv4_addr; flags interval;
+              elements = { {{ gateway_allowed_client_cidrs | join(', ') }} } }
+            chain input {
+              type filter hook input priority 0; policy drop;
+              iif lo accept
+              ct state established,related accept
+              meta l4proto { icmp, ipv6-icmp } accept
+              ip saddr @clients tcp dport 22 accept
+              udp dport 41641 accept
+            }
+            chain forward {
+              type filter hook forward priority 0; policy accept;
+              ct state established,related accept
+              ct status dnat tcp dport { 80, 443 } ip saddr != @clients drop
+            }
+          }
+      register: nft_gw
+
+    - name: Include nftables.d from nftables.conf
+      when: gateway_firewall | default('nftables') == 'nftables'
+      ansible.builtin.lineinfile:
+        path: /etc/nftables.conf
+        line: 'include "/etc/nftables.d/*.nft"'
+        create: true
+        mode: "0755"
+
+    - name: Load firewall
+      ansible.builtin.service: { name: nftables, state: restarted, enabled: true }
+      when: nft_gw is changed
+
+    - name: Restart docker after nftables reload so its chains are re-created
+      ansible.builtin.service: { name: docker, state: restarted }
+      when: nft_gw is changed

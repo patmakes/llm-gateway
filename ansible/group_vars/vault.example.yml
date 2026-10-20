@@ -1,0 +1,11 @@
+---
+# Copy to vault.yml, fill in, then encrypt:
+#   ansible-vault encrypt group_vars/vault.yml
+# vault.yml is git-ignored; this example is committed.
+
+# Bearer token clients send to /mcp ("Authorization: Bearer <token>").
+# Generate: openssl rand -hex 32     Leave "" to rely on network controls only.
+vault_mcp_bearer_token: "CHANGE_ME"
+
+# SearXNG instance secret. Generate: openssl rand -hex 32
+vault_searxng_secret_key: "CHANGE_ME"

@@ -1,0 +1,118 @@
+---
+# Deploy the MCP VM: MCP web-tools server + private SearXNG, with egress firewall
+#   ansible-playbook -i inventory.ini mcp-vm.yml
+- name: MCP web tools VM
+  hosts: mcp
+  become: true
+  vars:
+    mcp_root: /opt/mcp
+    mcp_docker_subnet: 172.30.0.0/24
+    mcp_bind_ip: 0.0.0.0            # or pin to the VM's tailnet IP
+    mcp_src_dir: "{{ playbook_dir }}/../mcp-server"
+
+  handlers:
+    - name: restart docker
+      ansible.builtin.service: { name: docker, state: restarted }
+
+  tasks:
+    - name: Docker engine
+      ansible.builtin.import_tasks: tasks-docker.yml
+
+    - name: Directories
+      ansible.builtin.file:
+        path: "{{ mcp_root }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [mcp-server, searxng, tls]
+
+    - name: MCP server source
+      ansible.builtin.copy:
+        src: "{{ mcp_src_dir }}/{{ item }}"
+        dest: "{{ mcp_root }}/mcp-server/{{ item }}"
+        mode: "0644"
+      loop: [server.py, requirements.txt, Dockerfile]
+      register: mcp_src
+
+    - name: TLS (cert SAN must equal mcp_upstream_host; readable by container uid 10001)
+      ansible.builtin.copy:
+        src: "{{ tls_src_dir }}/{{ mcp_upstream_host }}.{{ item.ext }}"
+        dest: "{{ mcp_root }}/tls/mcp.{{ item.ext }}"
+        owner: "10001"
+        mode: "{{ item.m }}"
+      loop:
+        - { ext: crt, m: "0644" }
+        - { ext: key, m: "0400" }
+      register: mcp_tls
+
+    - name: SearXNG settings
+      ansible.builtin.template:
+        src: templates/searxng-settings.yml.j2
+        dest: "{{ mcp_root }}/searxng/settings.yml"
+        mode: "0644"
+      register: searx_conf
+
+    - name: Compose file
+      ansible.builtin.template:
+        src: templates/compose.yml.j2
+        dest: "{{ mcp_root }}/compose.yml"
+        mode: "0644"
+      register: compose_file
+
+    - name: nftables drop-in directory
+      ansible.builtin.file:
+        path: /etc/nftables.d
+        state: directory
+        mode: "0755"
+
+    - name: Firewall rules
+      ansible.builtin.template:
+        src: templates/mcp-guard.nft.j2
+        dest: /etc/nftables.d/mcp-guard.nft
+        mode: "0644"
+      register: nft_rules
+
+    - name: Include nftables.d from nftables.conf
+      ansible.builtin.lineinfile:
+        path: /etc/nftables.conf
+        line: 'include "/etc/nftables.d/*.nft"'
+        create: true
+        mode: "0755"
+
+    - name: Check rules parse before loading
+      ansible.builtin.command: nft -c -f /etc/nftables.d/mcp-guard.nft
+      changed_when: false
+
+    - name: Load firewall
+      ansible.builtin.service: { name: nftables, state: restarted, enabled: true }
+      when: nft_rules is changed
+
+    - name: Re-create Docker chains after nftables flush
+      ansible.builtin.service: { name: docker, state: restarted }
+      when: nft_rules is changed
+
+    - name: Build and start the stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ mcp_root }}"
+        build: "{{ 'always' if mcp_src is changed else 'policy' }}"
+        recreate: "{{ 'always' if (mcp_tls is changed or searx_conf is changed or compose_file is changed) else 'auto' }}"
+        state: present
+
+    # ---- smoke tests from the VM itself
+    - name: SearXNG answers JSON (from inside the mcp container)
+      ansible.builtin.command: >
+        docker compose -f {{ mcp_root }}/compose.yml exec -T mcp
+        python -c "import httpx;print(httpx.get('http://searxng:8080/search',params={'q':'test','format':'json'}).status_code)"
+      register: searx_check
+      changed_when: false
+      failed_when: "'200' not in searx_check.stdout"
+      retries: 5
+      delay: 5
+      until: "'200' in searx_check.stdout"
+
+    - name: Egress guard blocks private ranges (expect failure)
+      ansible.builtin.command: >
+        docker compose -f {{ mcp_root }}/compose.yml exec -T mcp
+        python -c "import socket;socket.create_connection(('{{ gateway_ip }}',443),3)"
+      register: egress_check
+      changed_when: false
+      failed_when: egress_check.rc == 0

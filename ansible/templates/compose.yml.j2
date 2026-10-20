@@ -1,0 +1,51 @@
+# {{ ansible_managed }}
+name: mcp
+
+networks:
+  tools:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-mcp     # fixed name for the nftables rules
+    ipam:
+      config:
+        - subnet: {{ mcp_docker_subnet }}
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  networks: [tools]
+  dns: ["{{ mcp_dns_server }}"]
+
+services:
+  mcp:
+    <<: *hardening
+    build: ./mcp-server
+    image: local/mcp-web-tools:latest
+    ports:
+      - "{{ mcp_bind_ip }}:{{ mcp_upstream_port }}:8000"   # firewall limits this to the gateway
+    environment:
+      SEARXNG_URL: http://searxng:8080
+      MCP_ALLOWED_HOSTS: "{{ mcp_upstream_host }}:{{ mcp_upstream_port }}"
+      FORWARDED_ALLOW_IPS: "{{ gateway_ip }}"
+      TLS_CERT: /tls/mcp.crt
+      TLS_KEY: /tls/mcp.key
+    volumes:
+      - ./tls:/tls:ro
+    tmpfs: [/tmp]
+    mem_limit: 768m
+    pids_limit: 256
+    depends_on: [searxng]
+
+  searxng:
+    <<: *hardening
+    image: {{ searxng_image }}
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+    volumes:
+      - ./searxng:/etc/searxng:ro
+    tmpfs: [/tmp, /var/cache/searxng]
+    cap_add: [CHOWN, SETGID, SETUID]   # entrypoint drops to the searxng user
+    mem_limit: 512m
+    # no published ports: only the mcp container reaches it

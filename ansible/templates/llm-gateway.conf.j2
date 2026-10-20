@@ -1,0 +1,101 @@
+# {{ ansible_managed }}
+# Gateway for llama-server (/) and the MCP VM (/mcp) on one origin:
+#   https://{{ gateway_fqdn }}/      -> https://{{ llama_upstream_host }}:{{ llama_upstream_port }}
+#   https://{{ gateway_fqdn }}/mcp   -> https://{{ mcp_upstream_host }}:{{ mcp_upstream_port }}/mcp
+# Same origin means the llama.cpp web UI's in-browser MCP client needs no CORS
+# and no "Use llama-server proxy".
+
+# Resolve upstream names per request (valid=30s) instead of at startup, so a
+# dead/rebuilt VM gives a 502 on its path instead of stopping nginx from starting.
+resolver {{ gateway_resolver }} valid=30s ipv6=off;
+resolver_timeout 5s;
+
+# Optional bearer token for /mcp. Empty string disables the check.
+map $http_authorization $mcp_auth_ok {
+    default                         {{ 0 if mcp_bearer_token else 1 }};
+{% if mcp_bearer_token %}
+    "Bearer {{ mcp_bearer_token }}" 1;
+{% endif %}
+}
+
+server {
+    listen 80;
+    server_name {{ gateway_fqdn }};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name {{ gateway_fqdn }};
+
+    ssl_certificate     /etc/nginx/tls/gateway.crt;      # issued by your CA, SAN = {{ gateway_fqdn }}
+    ssl_certificate_key /etc/nginx/tls/gateway.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:SSL:10m;
+
+    # Only tailnet / LAN clients (defence in depth on top of the VM firewall)
+{% for cidr in gateway_allowed_client_cidrs %}
+    allow {{ cidr }};
+{% endfor %}
+    deny all;
+
+    access_log /var/log/nginx/llm-gateway.access.log;
+    error_log  /var/log/nginx/llm-gateway.error.log warn;
+
+    # Upstream TLS: verify both VMs against your own CA
+    proxy_ssl_verify               on;
+    proxy_ssl_verify_depth         2;
+    proxy_ssl_trusted_certificate  /etc/nginx/tls/ca-root.pem;
+    proxy_ssl_server_name          on;
+    proxy_ssl_protocols            TLSv1.2 TLSv1.3;
+
+    # Shared streaming settings (token streaming + MCP SSE responses).
+    # proxy_set_header lines live in each location: defining any of them in a
+    # location discards every server-level one (nginx inheritance rule).
+    proxy_http_version 1.1;
+    proxy_buffering    off;
+    proxy_cache        off;
+    proxy_request_buffering off;
+
+    # ------------------------------------------------------------- MCP VM
+    location = /mcp {
+        if ($mcp_auth_ok = 0) { return 401; }
+
+        set $mcp_upstream https://{{ mcp_upstream_host }}:{{ mcp_upstream_port }};
+        proxy_pass $mcp_upstream;                     # variable form: URI (/mcp) passed as-is
+        proxy_ssl_name   {{ mcp_upstream_host }};     # must match the MCP VM cert SAN
+        proxy_set_header Host {{ mcp_upstream_host }}:{{ mcp_upstream_port }};   # must be in MCP_ALLOWED_HOSTS
+        proxy_set_header Origin "";                   # same-origin browser call; drop it so the
+                                                      # MCP server's Origin check doesn't trip
+        proxy_set_header Authorization "";            # token stops here
+        proxy_set_header Connection        "";
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        # Mcp-Session-Id / Mcp-Protocol-Version pass through untouched by default
+
+        proxy_connect_timeout 5s;
+        proxy_read_timeout    600s;   # slow fetches, long-lived GET SSE stream
+        proxy_send_timeout    600s;
+        client_max_body_size  1m;
+    }
+
+    # ------------------------------------------------------------- llama-server
+    location / {
+        set $llama_upstream https://{{ llama_upstream_host }}:{{ llama_upstream_port }};
+        proxy_pass $llama_upstream;
+        proxy_ssl_name   {{ llama_upstream_host }};   # must match llama-server cert SAN
+        proxy_set_header Host $host;
+        proxy_set_header Connection        "";
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        # Authorization (llama-server --api-key) passes through from the client
+
+        proxy_connect_timeout 5s;
+        proxy_read_timeout    3600s;  # long generations
+        proxy_send_timeout    3600s;
+        client_max_body_size  64m;    # image/PDF attachments in the web UI
+    }
+}
