@@ -8,17 +8,17 @@ a gateway I control end to end.*
 The first time I ran a local LLM it was privateGPT, in 2023. I ingested a handful
 of documents, asked a 7B model a question about them, and waited. Minutes. The
 answer, when it arrived, was usually a confident restatement of the question.
-It was a great demo of the idea and a terrible tool.
+It was like a spark from flint - tough to get a fire going but you felt like it could really be something.
 
 Three years later, a 30-billion-parameter model running on a single consumer GPU
-in my basement reads my question, decides on its own that it needs to look
+on a homelab server reads my question, decides on its own that it needs to look
 something up, searches the web through my own search instance, picks a few
 results, reads them, and answers with citations to the pages it actually
 fetched — streaming it back token by token while it works. The whole path —
 inference, tools, search, TLS, authentication — runs on hardware I own, inside a
 network with nothing exposed to the internet.
 
-It feels like lightspeed compared to that first privateGPT run.
+If the first privateGPT run was like starting a fire with flint in the forest, now we are cooking with gas!
 
 This is the write-up of how it's built, what I had to learn about fitting a 25 GB
 model into 12 GB of VRAM, and the security engineering that turns "a model with
