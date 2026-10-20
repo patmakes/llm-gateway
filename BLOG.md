@@ -1,22 +1,20 @@
-# Building a Sovereign AI Lab
+# Three Years of Local AI: From Minutes-Per-Answer to a Sovereign Lab
 
 *A 30B-parameter model on a 12 GB GPU, with web tools it can actually use, behind
 a gateway I control end to end.*
 
-<!-- TODO(author): add the date this first worked end to end, e.g. "October 2026". -->
-
-## 2023, and then now
+## How far this has come
 
 The first time I ran a local LLM it was privateGPT, in 2023. I ingested a handful
 of documents, asked a 7B model a question about them, and waited. Minutes. The
 answer, when it arrived, was usually a confident restatement of the question.
 It was a great demo of the idea and a terrible tool.
 
-Last week a 30-billion-parameter model running on a single consumer GPU in my
-basement read my question, decided on its own that it needed to look something
-up, searched the web through my own search instance, picked three results, read
-them, and answered with citations to the pages it had actually fetched. It
-streamed the answer back token by token while it worked. The whole path —
+Three years later, a 30-billion-parameter model running on a single consumer GPU
+in my basement reads my question, decides on its own that it needs to look
+something up, searches the web through my own search instance, picks a few
+results, reads them, and answers with citations to the pages it actually
+fetched — streaming it back token by token while it works. The whole path —
 inference, tools, search, TLS, authentication — runs on hardware I own, inside a
 network with nothing exposed to the internet.
 
@@ -183,9 +181,8 @@ Two design choices are worth defending.
 
 **I wrote it instead of installing one.** Most off-the-shelf MCP servers speak
 stdio or the older SSE transport, neither of which the llama.cpp web UI's
-in-browser client can use. And of the ones that do fetch URLs, few guard
-*which* URLs. At 150 lines, owning it is cheaper than auditing someone else's —
-and I know exactly what it will and won't do.
+in-browser client can use — and of the ones that do fetch URLs, few guard
+*which* URLs. At 150 lines, owning it is cheaper than auditing someone else's.
 
 **It's stateless.** `stateless_http=True` means every request stands alone, so
 rebuilding the VM never strands a client holding a dead `Mcp-Session-Id`. For a
@@ -311,21 +308,22 @@ clock while the model insists otherwise — is written up as symptom, cause, fix
 and how to spot it fast.
 
 <!-- TODO(author): link docs/gotchas.md here once Phase 5 lands. -->
-<!-- TODO(author): screenshot — web UI citing a page it fetched via web_search + web_fetch. -->
-<!-- TODO(author): screenshot — nvidia-smi at --n-cpu-moe 32, ~1 GB free. -->
 
 ## What's next
 
-- Turn the `/mcp` bearer token on everywhere, not just where it's convenient.
-  It's optional today, which means "off" in at least one client.
-- Ship gateway and llm-host logs into Wazuh, where the rest of my
-  infrastructure already reports. Right now an nginx 502 is something I notice
-  by being inconvenienced.
-- More tools, carefully: read-only infrastructure and security auditing is the
-  obvious next one, and it's also the one where "read-only" has to be enforced
-  by something other than the tool's docstring.
-- CI that runs `ansible-lint` and playbook syntax checks, so the CA-filename
-  class of bug gets caught by a machine instead of by a crash loop.
+**A bigger model, on the RAM I'm not using.** This is the main one. MoE offload
+trades VRAM for system RAM, and llm-host has 64 GB of it on a host with 256 GB
+total. `--n-cpu-moe` is a dial, not a cliff: a larger model means more experts
+parked in RAM and a lower generation rate, and the interesting question is where
+that curve stops being worth it. Same tuning loop as above, bigger numbers.
+
+**The `/mcp` bearer token on everywhere.** It's optional today, which in
+practice means "off" in at least one client. The network controls are doing the
+real work, but defence in depth only counts if it's actually switched on.
+
+Observability — getting gateway and llm-host logs somewhere that notices a 502
+before I do — is the next build after that, and big enough to deserve its own
+write-up.
 
 ## Close
 
