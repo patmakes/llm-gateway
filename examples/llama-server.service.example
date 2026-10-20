@@ -1,0 +1,49 @@
+# systemd unit for llama-server on llm-host.
+#
+# Install:
+#   sudo cp llama-server.service.example /etc/systemd/system/llama-server.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now llama-server
+#   journalctl -u llama-server -f
+#
+# Why a unit at all: a VM reboot once left llama-server simply not running, and
+# the gateway returned 504s until someone noticed. Restart=on-failure plus
+# enable means the server comes back with the host.
+
+[Unit]
+Description=llama-server (North-Mini-Code-1.0, MoE CPU offload)
+Documentation=https://github.com/ggml-org/llama.cpp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Dedicated unprivileged account, in the group that can reach /dev/nvidia*.
+User=llama
+Group=llama
+
+ExecStart=/usr/local/bin/start-llm.sh
+
+Restart=on-failure
+RestartSec=5s
+
+# Loading ~25 GiB with --load-mode none is not instant: don't let systemd
+# decide the unit failed while the weights are still being read into RAM.
+TimeoutStartSec=600
+TimeoutStopSec=30
+
+# Modest hardening. Note that ProtectSystem=strict and PrivateDevices=true are
+# deliberately NOT set: the process needs the NVIDIA device nodes, and locking
+# those down takes DeviceAllow rules specific to your driver install.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+# Reading ~25 GiB of weights, with the KV cache and expert tensors in RAM.
+LimitMEMLOCK=infinity
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -51,6 +51,31 @@
         path: "{{ nginx_root }}/conf.d/default.conf"
         state: absent
 
+    # Pre-flight: validate the rendered config BEFORE the long-running container
+    # exists. A bad config or a missing cert makes nginx exit at startup; with
+    # restart_policy the container then sits in "Restarting (1)", and
+    # `docker exec` against it fails with Docker's 409 Conflict - hiding the
+    # real error behind a symptom of itself. A --rm container has no restart
+    # policy and needs no exec, so the actual message (e.g. "cannot load
+    # certificate ... BIO_new_file() failed") surfaces here, before the live
+    # gateway is touched. `nginx -t` parses and opens files but does not bind
+    # 80/443, so this is safe to run while the gateway is serving.
+    - name: Validate config in a throwaway container (pre-flight)
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --entrypoint
+          - nginx
+          - -v
+          - "{{ nginx_root }}/conf.d:/etc/nginx/conf.d:ro"
+          - -v
+          - "{{ nginx_root }}/tls:/etc/nginx/tls:ro"
+          - "{{ nginx_image }}"
+          - -t
+      changed_when: false
+
     - name: nginx container
       community.docker.docker_container:
         name: nginx-gateway
@@ -70,7 +95,9 @@
           test: ["CMD", "nginx", "-t", "-q"]
           interval: 60s
 
-    - name: Validate config inside the container before reloading
+    # Post-start sanity check: confirms the running container sees the same
+    # config the pre-flight validated (mounts, permissions), then reloads.
+    - name: Re-check config in the running container, then reload
       ansible.builtin.command: docker exec nginx-gateway nginx -t
       changed_when: false
       when: site_conf is changed

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# llama-server launch script for llm-host.  Invoked by llama-server.service.
+#
+# llm-host is NOT Ansible-managed: it owns the GPU and is set up by hand, so
+# this file and the unit beside it are the whole of its "deployment".
+#
+# Install:
+#   sudo install -m 0755 start-llm.sh.example /usr/local/bin/start-llm.sh
+#   sudo $EDITOR /usr/local/bin/start-llm.sh     # fix the four paths below
+set -euo pipefail
+
+# ---------------------------------------------------------------- paths (edit)
+LLAMA_BIN=/opt/llama.cpp/build/bin   # built from source, CUDA + -DLLAMA_OPENSSL=ON
+MODELS=/srv/models                   # where the GGUF lives
+TLS=/etc/llama/tls                   # cert + key, SAN must equal llama_upstream_host
+API_KEY_FILE=/etc/llama/api_key      # (umask 077; openssl rand -hex 32 > "$API_KEY_FILE")
+
+export PATH="$LLAMA_BIN:$PATH"
+
+# ---------------------------------------------------------------- preflight
+# Another runtime holding VRAM is the most common reason this fails to start.
+# Ollama with keep_alive: -1 parks ~10 GB indefinitely:  ollama ps / ollama stop
+command -v nvidia-smi >/dev/null && nvidia-smi \
+  --query-gpu=memory.used,memory.total --format=csv,noheader
+
+# ---------------------------------------------------------------- launch
+# exec: llama-server REPLACES this shell, so systemd's signals (stop, restart)
+# reach the server directly instead of being swallowed by a wrapper process.
+exec llama-server \
+  -m "$MODELS/North-Mini-Code-1.0-Q6_K_L.gguf" \
+  -ngl 999 --n-cpu-moe 32 \
+  `# -ngl 999: offload every layer it can; --n-cpu-moe 32: keep the expert FFN` \
+  `# weights of the first 32 layers in system RAM.  Lower = faster, until OOM.` \
+  -fa on -ctk q8_0 -ctv q8_0 \
+  `# flash attention + q8_0 KV cache: roughly halves KV VRAM, which is what` \
+  `# makes 32 layers fit at 32K context instead of OOMing on the KV cache.` \
+  -c 32768 -t 16 --jinja \
+  `# --jinja: use the chat template embedded in the GGUF.  Required here - this` \
+  `# model's template opens a reasoning block by default.` \
+  --load-mode none \
+  `# load weights into RAM instead of mmap; recommended when experts are` \
+  `# overridden to CPU anyway.` \
+  --host 0.0.0.0 --port 8443 \
+  `# native TLS; the host firewall is what limits 8443 to the gateway.` \
+  --ssl-cert-file "$TLS/llm-host.crt" \
+  --ssl-key-file  "$TLS/llm-host.key" \
+  --api-key-file  "$API_KEY_FILE"
