@@ -339,7 +339,10 @@ in a design review is the two-layer SSRF story: an application check that's
 honest about being best-effort, backed by a packet filter that isn't, and a
 deployment that fails its own smoke test if the filter ever stops working.
 
-Everything here is in this repo — Ansible playbooks, the MCP server, the nginx
-template, and the docs for standing it up yourself.
+Everything here is in the repo — Ansible playbooks, the MCP server, the nginx
+template, and the docs for standing it up yourself. It's MIT licensed, because
+the point of writing it down is that someone else gets to skip the crash loop.
+The model weights are Apache-2.0 and downloaded separately; the component
+licenses are listed in the README.
 
-<!-- TODO(author): confirm the repo is public before sharing this link, and add the URL. -->
+<!-- TODO(author): add the public repo URL here once the repo is published. -->
