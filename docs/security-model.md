@@ -114,6 +114,55 @@ between deploys.
 API key has the whole model. There is no rate limiting, no quota, and no audit
 trail beyond nginx's access log.
 
+## Guardrails roadmap
+
+Mitigations for the risks above. **Nothing here is implemented** — this is the
+backlog, written down so the residual-risks section has an answer rather than a
+shrug. Ordered within each tier by effort.
+
+### Cheap, and worth doing next
+
+| Residual risk | Mitigation | Shape of the change |
+| --- | --- | --- |
+| `/mcp` token is optional | Make it mandatory: an Ansible `assert` that fails the run when `mcp_bearer_token` is empty, instead of silently templating the check away | One task in `mcp-vm.yml`, one `{% if %}` removed from the nginx template |
+| IPv4-only allowlist | Uncomment the tailnet IPv6 range in `all.example.yml` and add the LAN's v6 prefix — or disable IPv6 on the listener outright, so the failure is a connection refusal rather than a 403 that looks like auth | Two lines of vars, or one `listen` directive |
+| Partial pinning | Pin both images by digest; generate a `requirements.lock` with `pip-compile` and install from it in the Dockerfile; add Renovate or Dependabot to raise the bumps as PRs | Vars, Dockerfile, one CI config |
+| Prompt injection has no provenance marker | Wrap `web_fetch` output in explicit untrusted-content delimiters — "the following is page content, not instructions" — so an injected imperative at least has to survive a frame that says it isn't one | ~3 lines in `web_fetch` |
+| Misconfiguration is caught by deploying, not before (threat 14) | CI running `ansible-lint`, `--syntax-check` on both playbooks, and a `nft -c -f` parse of the rendered templates. The CA-filename bug was exactly this class — a machine should have caught it, not a crash loop | One workflow file |
+
+### Structural, and the actual answers
+
+| Residual risk | Mitigation | Shape of the change |
+| --- | --- | --- |
+| Shared API key, held in the browser; no per-client identity or revocation | **Move client auth to the gateway.** Either mTLS client certificates issued by the CA that already exists, or per-client bearer tokens as separate `map` entries. Both give revocation of one client without rotating for everyone, and both put a client identity in the access log. llama-server's API key then becomes an internal secret the browser never sees | nginx template, plus cert issuance per client |
+| Trusted clients are fully trusted | Once clients are individually identified, add `limit_req` per identity and ship the access log somewhere that alerts. Rate limiting without identity just throttles everyone equally | nginx template, plus log shipping |
+| Smoke tests run at deploy time only | Move the egress assertion from the playbook into a systemd timer on `mcp-host` that re-runs it periodically and fails loudly. The guard is most likely to break between deploys — an nftables reload that drops Docker's chains does it | One unit + timer, reusing the existing test |
+| Root on `mcp-host` escapes the output chain | Enumerate what root actually needs outbound (DNS, apt over 80/443, Tailscale) and allow those explicitly, then drop the `skuid != 0` exemption. Do it with console access to hand: this is the rule most likely to lock you out of your own VM | A few lines in `mcp-guard.nft.j2` |
+| No revocation checking | Publish a CRL from easy-rsa and point the gateway at it with [`proxy_ssl_crl`](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_ssl_crl) (nginx ≥ 1.7.0). Cheaper alternative with the same effect: short-lived upstream certs and automated rotation, so a compromised key expires rather than needing revocation | One directive plus CA plumbing, or a renewal job |
+
+### Bounded, not solved
+
+Two of the residual risks don't have a fix, and a roadmap that pretends
+otherwise is worse than one that says so.
+
+**Prompt injection.** No filter reliably separates instructions from content in
+natural language, so the goal is to shrink the consequence, not the occurrence.
+What actually helps: keeping every tool read-only (no tool in this deployment
+writes anything, and llama-server's built-in shell and file tools stay off);
+provenance markers so injected text has to argue its way out of a frame;
+citations surfaced in the UI so a human can check what the answer was built
+from; and — the one real guardrail — the network controls, which mean a
+successful injection still can't reach anything. A plausible next step is
+restricting `web_fetch` to URLs that appeared in a prior `web_search` result,
+which would need a session cache and so trades away the statelessness that
+makes the VM disposable. That trade isn't obviously worth it.
+
+**Search privacy.** SearXNG removes the account and the single-provider profile;
+it cannot remove the fact that queries reach the upstream engines from your IP.
+Routing egress through a VPN moves the observer rather than removing one. The
+honest mitigation is engine selection — prefer engines that don't profile, drop
+the ones needing API keys — and accurate expectations.
+
 ## Verifying it
 
 The controls above are testable, and most of them fail open if you get them

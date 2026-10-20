@@ -363,6 +363,11 @@ that curve stops being worth it. Same tuning loop as above, bigger numbers.
 practice means "off" in at least one client. The network controls are doing the
 real work, but defence in depth only counts if it's actually switched on.
 
+The rest of the backlog lives in the
+[guardrails roadmap](docs/security-model.md#guardrails-roadmap) — one mitigation
+per residual risk, including the two that can only be bounded rather than
+fixed.
+
 Observability — getting gateway and llm-host logs somewhere that notices a 502
 before I do — is the next build after that, and big enough to deserve its own
 write-up.
