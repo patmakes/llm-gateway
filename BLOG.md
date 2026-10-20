@@ -152,9 +152,8 @@ exec llama-server \
 Two details in there cost me time. `--jinja` uses the chat template embedded in
 the GGUF, which matters here because this model's template opens a reasoning
 block by default and the output is incoherent without it. And it runs under
-systemd with `Restart=on-failure`, launched via `exec` so signals reach
-llama-server instead of dying in a wrapper shell. I'll come back to why that
-mattered.
+systemd, launched via `exec` — which is the next section, and which later turned
+out to matter more than I expected.
 
 Getting llama.cpp built at all had its own trap: `cohere2moe` needs build b9630
 or newer, and my first builds failed confusingly because an active conda
@@ -162,6 +161,33 @@ environment was leaking its own compilers and libraries into CMake. The fix was
 a scrubbed environment (`env -i` with only CUDA and system paths), which gets
 you system gcc 13.3, CUDA 12.6, and the system OpenSSL that
 `-DLLAMA_OPENSSL=ON` needs for native TLS.
+
+## How it actually starts
+
+Worth being concrete about this, because it's the part that turns a tuned
+command line into a service that survives a reboot — and because llm-host is
+the one machine here that **isn't** Ansible-managed. It owns the GPU and is set
+up by hand, so two files are its entire deployment.
+
+A **launch script** (`examples/start-llm.sh.example`) holds the flags above with
+the paths pulled out to four variables at the top. It prints `nvidia-smi` before
+launching, which sounds like noise until the first time the server won't start
+because another runtime is squatting on VRAM — Ollama with `keep_alive: -1`
+parks about 10 GB indefinitely, and the error you get is an allocation failure
+that says nothing about whose memory it is. The last line is `exec llama-server`,
+not `llama-server`: the script *replaces itself* with the server process, so
+systemd's stop and restart signals reach llama-server directly instead of being
+swallowed by a wrapper shell that outlives it.
+
+A **unit file** (`examples/llama-server.service.example`) runs that script as an
+unprivileged user with `Restart=on-failure` and `TimeoutStartSec=600` — because
+reading 25 GiB into RAM with `--load-mode none` is not instant, and the default
+start timeout will decide the unit failed while it's still loading.
+
+Two gates in front of it, neither of which is the gateway's job: `--api-key-file`
+means `/v1/models` returns 401 without the key (`/health` stays open), and the
+host firewall accepts 8443 **only from the gateway**, so there's no path to the
+inference server that skips the front door.
 
 ## Giving the model hands, safely
 
