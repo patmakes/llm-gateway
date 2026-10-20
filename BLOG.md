@@ -28,12 +28,12 @@ internet access" into something I'm willing to leave running.
 
 Four practical reasons, not ideological ones.
 
-**The data doesn't leave.** I paste logs, config, and half-written code into this
-thing. Every one of those is something I'd rather not hand to a third party's
-training pipeline or retention window.
+**The data doesn't leave.** I paste logs, config, and half-written code into
+this thing — none of which I want in a third party's training pipeline or
+retention window.
 
-**No per-token bill.** The marginal cost of a long conversation is electricity.
-That changes how you use a model: you stop rationing questions.
+**No per-token bill.** The marginal cost of a long conversation is electricity,
+which changes how you use a model: you stop rationing questions.
 
 **Nobody else decides what it can do.** Tool access, context length, system
 prompt, which model version I'm talking to this week — all mine. When a hosted
@@ -101,12 +101,11 @@ The model is North-Mini-Code-1.0 at Q6_K_L: a mixture-of-experts architecture,
 The GPU is an RTX 3060 with 12 GB of VRAM.
 
 Those numbers don't fit, and MoE is the reason they don't have to. In a dense
-model, every weight participates in every token, so every weight wants to be on
-the GPU. In an MoE model most of the parameter count sits in expert
-feed-forward blocks, and only a couple of experts fire per token. That changes
-the calculus: attention and the shared layers are hit constantly and belong on
-the GPU, while expert weights are touched sparsely and can live in system RAM at
-a tolerable cost.
+model every weight participates in every token, so every weight wants to be on
+the GPU. In an MoE model most of the parameter count sits in expert feed-forward
+blocks and only a couple of experts fire per token — so attention and the shared
+layers, hit constantly, belong on the GPU, while expert weights are touched
+sparsely and can live in system RAM at a tolerable cost.
 
 llama.cpp exposes this directly. `--n-cpu-moe N` keeps the expert weights of the
 first N layers on the CPU. Lower N means more experts on the GPU, which is
@@ -150,19 +149,19 @@ exec llama-server \
   --api-key-file  "$HOME/.llama_api_key"
 ```
 
-Two details in there that cost me time. `--jinja` tells llama-server to use the
-chat template embedded in the GGUF — which matters a lot here, because this
-model's template opens a reasoning block by default and the output is incoherent
-without it. And the whole thing runs under systemd with `Restart=on-failure`,
-launched via `exec` so signals reach llama-server instead of dying in a wrapper
-shell. I'll come back to why that mattered.
+Two details in there cost me time. `--jinja` uses the chat template embedded in
+the GGUF, which matters here because this model's template opens a reasoning
+block by default and the output is incoherent without it. And it runs under
+systemd with `Restart=on-failure`, launched via `exec` so signals reach
+llama-server instead of dying in a wrapper shell. I'll come back to why that
+mattered.
 
-Getting llama.cpp built at all had its own trap: `cohere2moe` support needs
-build b9630 or newer, and my first several builds failed in confusing ways
-because an active conda environment was leaking its own compilers and libraries
-into CMake. The fix was a scrubbed environment (`env -i`, with only CUDA and
-system paths), which gets you system gcc 13.3, CUDA 12.6, and the system
-OpenSSL that `-DLLAMA_OPENSSL=ON` needs for native TLS.
+Getting llama.cpp built at all had its own trap: `cohere2moe` needs build b9630
+or newer, and my first builds failed confusingly because an active conda
+environment was leaking its own compilers and libraries into CMake. The fix was
+a scrubbed environment (`env -i` with only CUDA and system paths), which gets
+you system gcc 13.3, CUDA 12.6, and the system OpenSSL that
+`-DLLAMA_OPENSSL=ON` needs for native TLS.
 
 ## Giving the model hands, safely
 
@@ -185,8 +184,8 @@ in-browser client can use — and of the ones that do fetch URLs, few guard
 *which* URLs. At 150 lines, owning it is cheaper than auditing someone else's.
 
 **It's stateless.** `stateless_http=True` means every request stands alone, so
-rebuilding the VM never strands a client holding a dead `Mcp-Session-Id`. For a
-box whose whole value proposition is "disposable", that's the right trade.
+rebuilding the VM never strands a client holding a dead `Mcp-Session-Id` — the
+right trade for a box whose whole value proposition is "disposable".
 
 Now the part that actually required thought. `web_fetch` takes a URL from a
 language model, and that model's context may contain text from a web page it
@@ -245,9 +244,9 @@ off. One origin means one certificate, one allowlist, one place to put auth.
 TLS runs on every hop, issued by my own easy-rsa CA — and the gateway
 *verifies* its upstreams against that CA (`proxy_ssl_verify on`, with
 `proxy_ssl_name` matching each upstream's cert SAN). "It's just the LAN" is how
-you end up with an internal network where any host can impersonate any service.
-On top of the per-VM firewalls, nginx carries an `allow`/`deny` list of client
-CIDRs — tailnet plus LAN — and an optional bearer token on `/mcp`.
+you end up with a network where any host can impersonate any service. On top of
+the per-VM firewalls, nginx carries an `allow`/`deny` list of client CIDRs and
+an optional bearer token on `/mcp`.
 
 The piece I'm quietly proudest of is three lines. nginx resolves hostnames in
 `proxy_pass` **at startup** and refuses to start if resolution fails, which
@@ -270,10 +269,17 @@ failed` and died; Docker dutifully restarted it; the container sat in
 `Restarting (1)`. What Ansible showed me, though, was a **409 Conflict** — because
 the playbook validated the config with `docker exec nginx-gateway nginx -t`, and
 you cannot exec into a container that's busy restarting. The real error was
-hiding behind a symptom of itself. Lesson: validate configuration in a
-*throwaway* container (`docker run --rm` with the conf and TLS mounts) *before*
-the long-lived one starts, so a bad config fails loudly at validation instead of
-turning into a restart loop that eats its own error message.
+hiding behind a symptom of itself.
+
+The fix is in the playbook now: before the long-lived container is touched, the
+config is validated in a *throwaway* container — `docker run --rm` with the same
+conf and TLS mounts and `nginx -t` as the command. Nothing to restart, nothing
+to exec into, so a bad cert path fails with the actual OpenSSL error, and it
+fails *before* the running gateway is replaced. The old in-container check
+stayed on as a post-start sanity check.
+
+The general lesson, which I keep re-learning: a validation step that depends on
+the thing it's validating isn't a validation step.
 
 **Published ports skip your INPUT chain.** I wrote a careful nftables input
 policy on mcp-host, restricted port 8000 to the gateway, reloaded, and found the
@@ -333,11 +339,11 @@ problem, and the interesting work moves to the boundaries: which process can
 reach which network, which check is advisory and which is enforcing, and what
 happens when one VM is simply gone.
 
-The MoE offload trick is the part that makes people's eyebrows go up — a 25 GB
-model on a 12 GB card at 29 tokens/sec is genuinely fun. But the part I'd defend
-in a design review is the two-layer SSRF story: an application check that's
-honest about being best-effort, backed by a packet filter that isn't, and a
-deployment that fails its own smoke test if the filter ever stops working.
+The MoE offload trick is the part that makes eyebrows go up — a 25 GB model on
+a 12 GB card at 29 tokens/sec is genuinely fun. But the part I'd defend in a
+design review is the two-layer SSRF story: an application check that's honest
+about being best-effort, backed by a packet filter that isn't, and a deployment
+that fails its own smoke test if the filter ever stops working.
 
 Everything here is in the repo — Ansible playbooks, the MCP server, the nginx
 template, and the docs for standing it up yourself. It's MIT licensed, because
