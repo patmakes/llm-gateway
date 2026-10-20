@@ -59,6 +59,9 @@ working.
 - `ansible/` — `mcp-vm.yml`, `nginx-gateway.yml`, templates, vars
 - `examples/` — llm-host's systemd unit and launch script (that host is set up
   by hand, not by Ansible)
+- [`docs/security-model.md`](docs/security-model.md) — trust boundaries, threats
+  mapped to the code that stops them, and the residual risks
+- [`BLOG.md`](BLOG.md) — how it was built, what broke, and why
 
 ## Deploy
 

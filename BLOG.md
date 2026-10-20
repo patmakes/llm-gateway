@@ -249,6 +249,13 @@ internal Docker network. The Ansible playbook ends by proving the guard works:
 it opens a connection from inside the MCP container to the gateway's IP and
 **fails the run if it succeeds**.
 
+The whole thing is written up as a threat model —
+[`docs/security-model.md`](docs/security-model.md) — with the four trust zones,
+a threat-to-control table where every row points at the file that implements it,
+and a residual-risks section that says out loud what this does *not* stop. The
+short version of that last part: these controls limit what an injected
+instruction can **reach**, not what the model **says**.
+
 One last thing about this layer that I enjoyed more than I should have:
 **llama-server never calls MCP at all.** The *client* does. The browser lists
 the tools, hands them to the model in the prompt, and when the model asks for
@@ -375,7 +382,8 @@ about being best-effort, backed by a packet filter that isn't, and a deployment
 that fails its own smoke test if the filter ever stops working.
 
 Everything here is in the repo — Ansible playbooks, the MCP server, the nginx
-template, and the docs for standing it up yourself. It's MIT licensed, because
+template, and [the security model](docs/security-model.md) if you want the
+version with the trade-offs left in. It's MIT licensed, because
 the point of writing it down is that someone else gets to skip the crash loop.
 The model weights are Apache-2.0 and downloaded separately; the component
 licenses are listed in the README.
